@@ -32,6 +32,7 @@ func (p *Pool) logError(err error) {
 	p.logger.Printf("livegollection: %v\n", err)
 }
 
+// TODO: solve the problem in a more elegant way.
 func poolError(err error) error {
 	return fmt.Errorf("pool: %v", err)
 }
