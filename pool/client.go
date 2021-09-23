@@ -84,8 +84,14 @@ func (c *client) close() {
 	c.closed = true
 }
 
+// handleWriteQueue is responsible for sending messages and
+// regular pings to the peer.
+// It takes the messages to send from the writeQueue channel.
 func (c *client) handleWriteQueue() {
+	// pingTicker is used to send regular pings to the peer.
+	// Pings must be send to prevent going past ReadDeadline.
 	pingTicker := time.NewTicker(pingPeriod)
+	// pingTicker has to be stopped to release associated resources.
 	defer pingTicker.Stop()
 
 	for {
@@ -94,6 +100,9 @@ func (c *client) handleWriteQueue() {
 
 		select {
 		case <-c.toClose:
+			// Receiving a value from toClose channel means that handleReadQueue
+			// is no more using the connection (and has exited or will exit soon),
+			// we can close the connection and exit.
 			c.close()
 			return
 		case <-pingTicker.C:
@@ -102,8 +111,13 @@ func (c *client) handleWriteQueue() {
 			messageType, data = mess.messageType, mess.data
 		}
 
+		// Each time we send a message, we set the WriteDeadline before.
+		// If the message won't be delivered before the deadline,
+		// WriteMessage will return an error and the connection will be corrupted.
 		c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 		if err := c.conn.WriteMessage(messageType, data); err != nil {
+			// If an error occurs we send true on toClose channel and exit,
+			// after having logged the error.
 			c.pool.logError(clientError(err))
 			c.toClose <- true
 			return
@@ -111,27 +125,41 @@ func (c *client) handleWriteQueue() {
 	}
 }
 
+// handleReadQueue is responsible for reading and waiting for messages
+// and pings from the peer.
+// If a message has been read successfully, it will be pushed onto readQueue.
 func (c *client) handleReadQueue() {
+	// Initilization for the read deadline.
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	// Every time we receive a pong message, we update the ReadDeadline (keeping the connection alive).
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
 		select {
 		case <-c.toClose:
+			// Receiving a value from toClose channel means that handleWriteQueue
+			// is no more using the connection (and has exited or will exit soon),
+			// we can close the connection and exit.
 			c.close()
 			return
 		default:
 			messageType, data, err := c.conn.ReadMessage()
 			if err != nil {
+				// If an error occurs we send true on toClose channel and exit,
+				// after having logged the error.
 				c.pool.logError(clientError(err))
 				c.toClose <- true
 				return
 			}
 
+			// If the program is working as intended, this condition will never be true.
+			// We expect messageType to be always text or binary.
 			if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
 				c.pool.logError(clientError(fmt.Errorf("unexpected messageType: %d", messageType)))
 				continue
 			}
 
+			// If the message has been read successfully, we can push it onto the readQueue.
 			c.pool.readQueue <- &message{messageType, data}
 		}
 	}

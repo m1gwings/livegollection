@@ -9,6 +9,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Pool manages a group of websocket connections.
+// It is responsible for upgrading connections of new clients,
+// reading and serializing messages from them.
+// It also allows to broadcast a message to the entire pool.
 type Pool struct {
 	clients       map[int]*client
 	autoIncrement int
@@ -19,11 +23,14 @@ type Pool struct {
 	logger *log.Logger
 }
 
+// NewPool creates and properly initialize a *Pool.
 func NewPool(l *log.Logger) *Pool {
 	return &Pool{clients: make(map[int]*client),
 		readQueue: make(chan *message), logger: l}
 }
 
+// logError, after having checked that the logger has been set,
+// logs errors, adding to them the special prefix: "livegollection ".
 func (p *Pool) logError(err error) {
 	if p.logger == nil {
 		return
@@ -33,10 +40,12 @@ func (p *Pool) logError(err error) {
 }
 
 // TODO: solve the problem in a more elegant way.
+// clientError adds the prefix "pool: " to a generic error.
 func poolError(err error) error {
 	return fmt.Errorf("pool: %v", err)
 }
 
+// upgrader is used to upgrade the websocket connection of new clients.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
