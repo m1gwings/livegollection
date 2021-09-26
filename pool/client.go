@@ -2,7 +2,9 @@ package pool
 
 // Code inspired from https://github.com/gorilla/websocket/blob/master/examples/chat/client.go .
 import (
+	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -19,7 +21,8 @@ const (
 
 	// Send pings to peer with this period.
 	// It must be less then pongWait, to prevent going past the ReadDeadline.
-	pingPeriod = (pongWait * 9) / 10
+	// We are also considering writeWait.
+	pingPeriod = pongWait - writeWait
 )
 
 // message represents the generic message exchanged over websocket connection.
@@ -35,36 +38,38 @@ type client struct {
 	conn *websocket.Conn
 
 	// writeQueue collects all the messages that have to be delivered to the peer.
-	// These messages will be handled by handleWriteQueue().
+	// These messages will be handled by writeQueueHandler().
 	writeQueue chan *message
-
-	// toClose is used to prevent a goroutine to close the connection,
-	// because an error has occured, while the other is still active.
-	// Goroutines in question are handleReadQueue and handleWriteQueue.
-	// When handleWriteQueue (or handleReadQueue) encounters an error,
-	// it sends true on toClose channel and exits.
-	// Then handleReadQueue (or handleWriteQueue) will call client.close(),
-	// since now there is no other goroutine active, and exit.
-	toClose chan bool
-
-	// closed is true if conn.Close() has been called.
-	// If closed is true, it's possible to delete the client object without worrying
-	// of goroutine leaks.
-	closed bool
 
 	// pool is a reference to the Pool to whom this client belongs.
 	pool *Pool
+
+	// cancel, if invoked, will stop readQueueHandler, writeQueueHandler and subsequently closeHandler.
+	// If closed is not true, but you want to shut the client down, make sure to call this function.
+	// Otherwise it will lead to goroutine leaks: closeHanlder, readQueueHandler and writeQueueHandler
+	// won't stop running.
+	cancel context.CancelFunc
+
+	// closed is true if and only if conn.Close() has been called.
+	// If closed is true, it's possible to delete the client without worrying about goroutine leaks.
+	closed bool
 }
 
 // newClient returns a *client after having initialized it properly.
-// It also starts the concurrent goroutines to handle read and write queues.
+// It is important to create new clients only by this factory function beacuase
+// it also starts the concurrent goroutine to handle client shutdown (closeHandler),
+// which in turn starts the concurrent goroutines to handle read and write queue.
 func newClient(conn *websocket.Conn, pool *Pool) *client {
-	c := &client{conn: conn,
-		writeQueue: make(chan *message, 1), toClose: make(chan bool, 1),
-		pool: pool}
+	ctx, cancel := context.WithCancel(context.Background())
 
-	go c.handleWriteQueue()
-	go c.handleReadQueue()
+	c := &client{
+		conn:       conn,
+		writeQueue: make(chan *message, 1),
+		pool:       pool,
+		cancel:     cancel,
+	}
+
+	go c.closeHandler(ctx)
 
 	return c
 }
@@ -75,19 +80,10 @@ func clientError(err error) error {
 	return fmt.Errorf("client: %v", err)
 }
 
-// close calls conn.Close() (and handles the eventual error).
-// It also sets closed = true.
-func (c *client) close() {
-	if err := c.conn.Close(); err != nil {
-		c.pool.logError(clientError(err))
-	}
-	c.closed = true
-}
-
-// handleWriteQueue is responsible for sending messages and
+// writeQueueHandler is responsible for sending messages and
 // regular pings to the peer.
 // It takes the messages to send from the writeQueue channel.
-func (c *client) handleWriteQueue() {
+func (c *client) writeQueueHandler(ctx context.Context) {
 	// pingTicker is used to send regular pings to the peer.
 	// Pings must be send to prevent going past ReadDeadline.
 	pingTicker := time.NewTicker(pingPeriod)
@@ -99,11 +95,8 @@ func (c *client) handleWriteQueue() {
 		var data []byte
 
 		select {
-		case <-c.toClose:
-			// Receiving a value from toClose channel means that handleReadQueue
-			// is no more using the connection (and has exited or will exit soon),
-			// we can close the connection and exit.
-			c.close()
+		case <-ctx.Done():
+			// The cancel function has been invoked, this goroutine should exit.
 			return
 		case <-pingTicker.C:
 			messageType, data = websocket.PingMessage, nil
@@ -116,39 +109,40 @@ func (c *client) handleWriteQueue() {
 		// WriteMessage will return an error and the connection will be corrupted.
 		c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 		if err := c.conn.WriteMessage(messageType, data); err != nil {
-			// If an error occurs we send true on toClose channel and exit,
-			// after having logged the error.
+			// If an error occurs we invoke cancel(), so readQueueHandler will be noticed,
+			// and exit.
 			c.pool.logError(clientError(err))
-			c.toClose <- true
+			c.cancel()
 			return
 		}
 	}
 }
 
-// handleReadQueue is responsible for reading and waiting for messages
+// readQueueHandler is responsible for reading and waiting for messages
 // and pings from the peer.
 // If a message has been read successfully, it will be pushed onto readQueue.
-func (c *client) handleReadQueue() {
+func (c *client) readQueueHandler(ctx context.Context) {
 	// Initilization for the read deadline.
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 
 	// Every time we receive a pong message, we update the ReadDeadline (keeping the connection alive).
-	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
 	for {
 		select {
-		case <-c.toClose:
-			// Receiving a value from toClose channel means that handleWriteQueue
-			// is no more using the connection (and has exited or will exit soon),
-			// we can close the connection and exit.
-			c.close()
+		case <-ctx.Done():
+			// The cancel function has been invoked, this goroutine should exit.
 			return
 		default:
 			messageType, data, err := c.conn.ReadMessage()
 			if err != nil {
-				// If an error occurs we send true on toClose channel and exit,
-				// after having logged the error.
+				// If an error occurs we invoke cancel(), so readQueueHandler will be noticed,
+				// and exit.
 				c.pool.logError(clientError(err))
-				c.toClose <- true
+				c.cancel()
 				return
 			}
 
@@ -163,4 +157,28 @@ func (c *client) handleReadQueue() {
 			c.pool.readQueue <- &message{messageType, data}
 		}
 	}
+}
+
+// closeHandler is responsible for waiting writeQueueHandler and readQueueHandler to exit
+// and then invoke conn.Close(). It will also set closed = true.
+func (c *client) closeHandler(ctx context.Context) {
+	// wg is necessary to wait for writeQueueHandler and readQueueHandler to exit.
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+	go func() {
+		c.writeQueueHandler(ctx)
+		wg.Done()
+	}()
+	go func() {
+		c.readQueueHandler(ctx)
+		wg.Done()
+	}()
+
+	wg.Wait()
+	if err := c.conn.Close(); err != nil {
+		c.pool.logError(clientError(err))
+	}
+
+	c.closed = true
 }

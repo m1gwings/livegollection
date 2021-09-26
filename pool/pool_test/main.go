@@ -27,5 +27,16 @@ func main() {
 	http.HandleFunc("/script", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "script.js")
 	})
+
+	// Testing p.CloseAll()
+	// timer := time.NewTicker(time.Minute)
+	// go func() {
+	// 	<-timer.C
+	// 	log.Printf("active goroutines: %d\n", runtime.NumGoroutine())
+	// 	p.CloseAll()
+	// 	time.Sleep(time.Minute)
+	// 	log.Printf("active goroutines: %d\n", runtime.NumGoroutine())
+	// }()
+
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }

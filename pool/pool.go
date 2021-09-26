@@ -9,12 +9,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// TODO: Add unit testing (pool_test.go).
+
 // Pool manages a group of websocket connections.
 // It is responsible for upgrading connections of new clients,
 // reading and serializing messages from them.
 // It also allows to broadcast a message to the entire pool.
 type Pool struct {
-	// map of clients in the pool.
+	// clients is a map of clients in the pool.
 	clients map[int]*client
 
 	// autoIncrement ensures that each client is represented by a unique integer key.
@@ -31,14 +33,14 @@ type Pool struct {
 	logger *log.Logger
 }
 
-// NewPool creates and properly initialize a pool.
+// NewPool creates and properly initializes a pool.
 func NewPool(l *log.Logger) *Pool {
 	return &Pool{clients: make(map[int]*client),
 		readQueue: make(chan *message), logger: l}
 }
 
 // logError, after having checked that the logger has been set,
-// logs errors, adding to them the special prefix: "livegollection ".
+// logs errors, adding to them the special prefix: "livegollection: ".
 func (p *Pool) logError(err error) {
 	if p.logger == nil {
 		return
@@ -75,6 +77,8 @@ func (p *Pool) ConnHandlerFunc(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// It's important to create new clients using newClient factory function
+	// in order to inizialize them properly.
 	p.clients[p.autoIncrement] = newClient(conn, p)
 	p.autoIncrement++
 }
@@ -136,9 +140,22 @@ func (p *Pool) SendMessageToAll(messageType int, data []byte) {
 }
 
 // ReadNextMessageInQueue is a blocking operation that eventually will return
-// the next message in read queue, where all the messages from clients are serialized.
+// the next message in readQueue, where all the messages from clients are serialized.
 // Sender of the message could be any of the clients in the pool.
 func (p *Pool) ReadNextMessageInQueue() []byte {
 	mess := <-p.readQueue
 	return mess.data
+}
+
+// CloseAll shuts down all the clients in the pool.
+// Make sure to invoke it before deleting the pool, otherwise it will lead to goroutine leaks.
+func (p *Pool) CloseAll() {
+	// We need to lock the mutex because we are accessing clients map.
+	// If we don't, for example, sendMessage could delete a client just before we invoke c.cancel().
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, c := range p.clients {
+		c.cancel()
+	}
 }
