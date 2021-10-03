@@ -9,8 +9,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// TODO: Add unit testing (pool_test.go).
-
 // Pool manages a group of websocket connections.
 // It is responsible for upgrading connections of new clients,
 // reading and serializing messages from them.
@@ -35,8 +33,11 @@ type Pool struct {
 
 // NewPool creates and properly initializes a pool.
 func NewPool(l *log.Logger) *Pool {
-	return &Pool{clients: make(map[int]*client),
-		readQueue: make(chan *message), logger: l}
+	return &Pool{
+		clients:   make(map[int]*client),
+		readQueue: make(chan *message),
+		logger:    l,
+	}
 }
 
 // logError, after having checked that the logger has been set,
@@ -86,14 +87,18 @@ func (p *Pool) ConnHandlerFunc(w http.ResponseWriter, r *http.Request) {
 // sendMessage is an helper function used to send a message to a specific client.
 // key is the integer key that identifies the client in clients map.
 // It is important that there is atmost one goroutine at the time running
-// sendMessage with the same value for key in order to prevent race conditions
-// when deleting the client from the map.
+// sendMessage with the same value of key in order to prevent race conditions,
+// for example when deleting the client from the map.
 func (p *Pool) sendMessage(key int, mess *message) {
+	// This function should not lock the mutex,
+	// otherwise messages could be delivered just to a peer at a time.
+	// Race conditions are prevented by the mutex lock in SendMessageToAll.
+
 	c, ok := p.clients[key]
 
 	// If the program is working as intended, this condition will never be true.
 	if !ok {
-		p.logError(poolError(fmt.Errorf("unexpected clients key: %d", key)))
+		p.logError(poolError(fmt.Errorf("unexpected client key: %d", key)))
 		return
 	}
 
@@ -111,12 +116,14 @@ func (p *Pool) sendMessage(key int, mess *message) {
 }
 
 // SendMessageToAll broadcasts data to all the clients in the pool.
+// messageType is the integer associated to the type of websocket message,
+// an example value for messageType is websocket.TextMessage where
+// websocket refers to github.com/gorilla/websocket package.
 func (p *Pool) SendMessageToAll(messageType int, data []byte) {
-	// We need to use a mutex to prevent race conditions.
-	// Indeed inside this function we call sendMessage,
+	// We need to use a mutex because we are reading from clients map.
+	// Furthermore inside this function we call sendMessage,
 	// which could execute delete on clients map (if c.closed is true).
-	// Furthermore this way we preserve the order of delivery of messages.
-	// TODO: Try locking the mutex directly inside sendMessage, order of delivery of messages should be preserved anyway.
+	// In this way we also preserve the order of delivery of messages.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -151,7 +158,6 @@ func (p *Pool) ReadNextMessageInQueue() []byte {
 // Make sure to invoke it before deleting the pool, otherwise it will lead to goroutine leaks.
 func (p *Pool) CloseAll() {
 	// We need to lock the mutex because we are accessing clients map.
-	// If we don't, for example, sendMessage could delete a client just before we invoke c.cancel().
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

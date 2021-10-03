@@ -4,6 +4,7 @@ package pool
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -38,7 +39,7 @@ type client struct {
 	conn *websocket.Conn
 
 	// writeQueue collects all the messages that have to be delivered to the peer.
-	// These messages will be handled by writeQueueHandler().
+	// These messages will be handled by writeQueueHandler.
 	writeQueue chan *message
 
 	// pool is a reference to the Pool to whom this client belongs.
@@ -58,7 +59,7 @@ type client struct {
 // newClient returns a *client after having initialized it properly.
 // It is important to create new clients only by this factory function beacuase
 // it also starts the concurrent goroutine to handle client shutdown (closeHandler),
-// which in turn starts the concurrent goroutines to handle read and write queue.
+// which in turn starts the concurrent goroutines to handle read and write queues.
 func newClient(conn *websocket.Conn, pool *Pool) *client {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -109,7 +110,7 @@ func (c *client) writeQueueHandler(ctx context.Context) {
 		// WriteMessage will return an error and the connection will be corrupted.
 		c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 		if err := c.conn.WriteMessage(messageType, data); err != nil {
-			// If an error occurs we invoke cancel(), so readQueueHandler will be noticed,
+			// If an error occurs we invoke cancel, so readQueueHandler will be alerted,
 			// and exit.
 			c.pool.logError(clientError(err))
 			c.cancel()
@@ -139,18 +140,43 @@ func (c *client) readQueueHandler(ctx context.Context) {
 		default:
 			messageType, data, err := c.conn.ReadMessage()
 			if err != nil {
-				// If an error occurs we invoke cancel(), so readQueueHandler will be noticed,
-				// and exit.
-				c.pool.logError(clientError(err))
-				c.cancel()
+				// When cancel is invoked by writeQueueHandler or by the pool through CloseAll method,
+				// writeQueueHandler will exit in at most writeWait seconds,
+				// (if cancel is invoked by writeQueueHandler it will exit in 0 s which is less than writeWait :D)
+				// which corresponds to the maximum time that WriteMessage could take to return;
+				// on the next iteration of the outer for loop <-ctx.Done() will be ready
+				// and writeQueueHandler will be notified to exit.
+				// With readQueueHandler things are more complicated:
+				// ReadMessage returns only when the client receives a binary or text message from the peer.
+				// Control messages are handled by dedicated handlers without having ReadMessage to return.
+				// So if cancel is invoked while ReadMessage is running we have two scenarios:
+				// Scenario 1: The peer will send a message to the client for whatever reason,
+				// ReadMessage will return it without errors and on the next iteration of the outer for loop
+				// will be notified to exit. In this scenario we don't have to do something special.
+				// Scenario 2: The peer won't send any message; since writeQueueHandler has exited,
+				// it has also stopped sending pings, so ReadMessage will return an error
+				// after going past the ReadDeadline for not receiving pong messages from the peer.
+				// In this scenario we don't want to log the error since it is "intended",
+				// so with the select below we check if the error is a timeout error and
+				// if cancel function has been invoked, otherwise we normally log the error.
+				// This also tells us that readQueueHandler could take at most pongWait seconds to exit
+				// (the same applies to closeHandler since it waits for readQueueHandler to exit).
+				select {
+				case <-ctx.Done():
+					// The fact that "going past ReadDeadline err" satisfies net.Error interface
+					// is not warranted by the public API, I had to look into the source code.
+					// So this way of checking if the error is a timeout error could stop working
+					// with future updates of the websocket package.
+					if netErr, ok := err.(net.Error); (ok && !netErr.Timeout()) || !ok {
+						c.pool.logError(clientError(err))
+					}
+				default:
+					// If an UNEXPECTED error occurs we invoke cancel, so readQueueHandler will be alerted,
+					// and exit.
+					c.pool.logError(clientError(err))
+					c.cancel()
+				}
 				return
-			}
-
-			// If the program is working as intended, this condition will never be true.
-			// We expect messageType to be always text or binary.
-			if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
-				c.pool.logError(clientError(fmt.Errorf("unexpected messageType: %d", messageType)))
-				continue
 			}
 
 			// If the message has been read successfully, we can push it onto the readQueue.
@@ -163,7 +189,20 @@ func (c *client) readQueueHandler(ctx context.Context) {
 // and then invoke conn.Close(). It will also set closed = true.
 func (c *client) closeHandler(ctx context.Context) {
 	// wg is necessary to wait for writeQueueHandler and readQueueHandler to exit.
+	// It's important to wait for them to exit because we don't want to close the
+	// underlying connection while WriteMessage or ReadMessage are still running.
 	var wg sync.WaitGroup
+
+	// The default CloseHandler sends a close message back to the peer.
+	// But we send a close message anyway at the end of this function,
+	// so leaving default CloseHandler could lead to a duplicated close message.
+	// The reason because we need to send a close message at the end of this function
+	// is clear when the client has not sent any close message, but it's the pool
+	// that is shutting it down (so default CloseHandler would not be triggered).
+	// With the close message we can communicate to the peer that the websocket is closed.
+	c.conn.SetCloseHandler(func(code int, text string) error {
+		return nil
+	})
 
 	wg.Add(2)
 	go func() {
@@ -176,6 +215,14 @@ func (c *client) closeHandler(ctx context.Context) {
 	}()
 
 	wg.Wait()
+
+	// conn.Close() just closes the underlying connection, in order to send a websocket close message,
+	// we need to do it explicitly.
+	if err := c.conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+		c.pool.logError(clientError(err))
+	}
+
 	if err := c.conn.Close(); err != nil {
 		c.pool.logError(clientError(err))
 	}
