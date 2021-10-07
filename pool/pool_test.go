@@ -11,22 +11,32 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const htt = "http"
-const ws = "ws"
+const httpStr = "http"
+const wsStr = "ws"
 
+// switchProtocol replaces the http protocol in url with ws. (http://... -> ws://...)
+// It is needed because (*httptest.Server).URL returns the endpoint url with http protocol,
+// but we need to communicate over websocket protocol.
 func switchProtocol(url string) string {
-	return strings.Replace(url, htt, ws, 1)
+	return strings.Replace(url, httpStr, wsStr, 1)
 }
 
+// poolErrorsWriter is used to catch all the errors logged by the pool logger
+// and redirect them to t.Error.
 type poolErrorsWriter struct {
 	t *testing.T
 }
 
+// Write method implements the io.Writer interface for poolErrorsWriter.
+// In this way we can set poolErrorsWriter as the out stream for the pool logger,
+// thus we can catch all the logged errors and report them with t.Error.
 func (pErr poolErrorsWriter) Write(data []byte) (int, error) {
 	pErr.t.Errorf("%s", string(data))
 	return len(data), nil
 }
 
+// newTestLogger returns a properly formatted logger with a poolErrorsWriter as the out stream.
+// This factory function is used by newTestPool to set the pool logger.
 func newTestLogger(t *testing.T) *log.Logger {
 	return log.New(
 		poolErrorsWriter{t: t},
@@ -35,15 +45,23 @@ func newTestLogger(t *testing.T) *log.Logger {
 	)
 }
 
+// newTestPool returns a properly formatted pool, setting its logger through newTestLogger.
+// All the *Pool objects in tests should be created via this factory function,
+// in this way all the errors logged by the pool will appear as errors in the output of the test.
 func newTestPool(t *testing.T) *Pool {
 	return NewPool(newTestLogger(t))
 }
 
+// newTestServer returns an http test server after having set pool.ConnHandlerFunc as its handler.
 func newTestServer(pool *Pool) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(pool.ConnHandlerFunc))
 }
 
+// populate opens connsNum connections to the websocket server reachable through url,
+// then it returns all the connections in a slice.
 func populate(url string, connsNum int) ([]*websocket.Conn, error) {
+	// We set the initial length of the slice to 0, and the capacity to connsNum.
+	// So we can use append without risk of reallocations.
 	conns := make([]*websocket.Conn, 0, connsNum)
 
 	for i := 0; i < connsNum; i++ {
@@ -70,7 +88,7 @@ func TestConnHandlerFunc(t *testing.T) {
 	}
 }
 
-// Taken from gorilla websocket docs and slightly adjusted.
+// readLoop is needed in order to process control messages received by c.
 func readLoop(c *websocket.Conn) {
 	for {
 		if _, _, err := c.ReadMessage(); err != nil {
@@ -80,9 +98,10 @@ func readLoop(c *websocket.Conn) {
 	}
 }
 
-// IMPORTANT: This test needs at least pongWait seconds to complete for reasons
-// explained in a extensive comment in readQueueHandler (inside client.go).
 func TestCloseAll(t *testing.T) {
+	// This test needs at least pongWait seconds to complete for reasons
+	// explained in a extensive comment in readQueueHandler (inside client.go).
+
 	pool := newTestPool(t)
 
 	testSrv := newTestServer(pool)
