@@ -50,12 +50,6 @@ func (p *Pool) logError(err error) {
 	p.logger.Printf("livegollection: %v\n", err)
 }
 
-// TODO: solve the problem in a more elegant way.
-// poolError adds the prefix "pool: " to a generic error.
-func poolError(err error) error {
-	return fmt.Errorf("pool: %v", err)
-}
-
 // upgrader is used to upgrade the websocket connection of new clients.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -69,7 +63,7 @@ var upgrader = websocket.Upgrader{
 func (p *Pool) ConnHandlerFunc(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		p.logError(poolError(err))
+		p.logError(fmt.Errorf("error in ConnHandlerFunc after upgrading the connection: %v", err))
 		return
 	}
 
@@ -98,7 +92,7 @@ func (p *Pool) sendMessage(key int, mess *message) {
 
 	// If the program is working as intended, this condition will never be true.
 	if !ok {
-		p.logError(poolError(fmt.Errorf("unexpected client key: %d", key)))
+		p.logError(fmt.Errorf("error in sendMessage: unexpected client key: %d", key))
 		return
 	}
 

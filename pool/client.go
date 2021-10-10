@@ -75,12 +75,6 @@ func newClient(conn *websocket.Conn, pool *Pool) *client {
 	return c
 }
 
-// TODO: solve the problem in a more elegant way.
-// clientError adds the prefix "client: " to a generic error.
-func clientError(err error) error {
-	return fmt.Errorf("client: %v", err)
-}
-
 // writeQueueHandler is responsible for sending messages and
 // regular pings to the peer.
 // It takes the messages to send from the writeQueue channel.
@@ -112,7 +106,7 @@ func (c *client) writeQueueHandler(ctx context.Context) {
 		if err := c.conn.WriteMessage(messageType, data); err != nil {
 			// If an error occurs we invoke cancel, so readQueueHandler will be alerted,
 			// and exit.
-			c.pool.logError(clientError(err))
+			c.pool.logError(fmt.Errorf("error in wirteQueueHandler from conn.WriteMessage: %v", err))
 			c.cancel()
 			return
 		}
@@ -168,12 +162,12 @@ func (c *client) readQueueHandler(ctx context.Context) {
 					// So this way of checking if the error is a timeout error could stop working
 					// with future updates of the websocket package.
 					if netErr, ok := err.(net.Error); (ok && !netErr.Timeout()) || !ok {
-						c.pool.logError(clientError(err))
+						c.pool.logError(fmt.Errorf("error in readQueueHandler from conn.ReadMessage after cancel has been invoked: %v", err))
 					}
 				default:
 					// If an UNEXPECTED error occurs we invoke cancel, so readQueueHandler will be alerted,
 					// and exit.
-					c.pool.logError(clientError(err))
+					c.pool.logError(fmt.Errorf("error in readQueueHandler from conn.ReadMessage: %v", err))
 					c.cancel()
 				}
 				return
@@ -218,13 +212,16 @@ func (c *client) closeHandler(ctx context.Context) {
 
 	// conn.Close() just closes the underlying connection, in order to send a websocket close message,
 	// we need to do it explicitly.
-	if err := c.conn.WriteMessage(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
-		c.pool.logError(clientError(err))
+	if err := c.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(writeWait),
+	); err != nil {
+		c.pool.logError(fmt.Errorf("error in closeHandler from conn.WriteMessage when sending close message: %v", err))
 	}
 
 	if err := c.conn.Close(); err != nil {
-		c.pool.logError(clientError(err))
+		c.pool.logError(fmt.Errorf("error in closeHandler from conn.Close: %v", err))
 	}
 
 	c.closed = true
