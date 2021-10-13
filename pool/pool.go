@@ -56,15 +56,26 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-// ConnHandlerFunc can be used as an http.HandlerFunc for an endpoint.
-// Every GET request to the endpoint, if properly formatted,
-// will be upgraded to a websocket connection and added to the pool.
-// This is the intended way to add clients to the pool.
-func (p *Pool) ConnHandlerFunc(w http.ResponseWriter, r *http.Request) {
+// AddToPool is the intended way to add a client to the pool.
+// It can be used inside an http.HandlerFunc.
+// initialMessages is the array of message bodies that are going to be sent to the
+// client before every other update from the pool.
+// messageType specifies the type of each one of the initial messages.
+func (p *Pool) AddToPool(w http.ResponseWriter, r *http.Request,
+	messageType int, initialMessages [][]byte) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		p.logError(fmt.Errorf("error in ConnHandlerFunc after upgrading the connection: %v", err))
+		p.logError(fmt.Errorf("error in AddToPool after upgrading the connection: %v", err))
 		return
+	}
+
+	// We need to create the client before locking the mutex,
+	// since we don't want to lock the entire pool while we send initial messages to the new client.
+	// It's important to create new clients using newClient factory function
+	// in order to inizialize them properly.
+	c := newClient(conn, p)
+	for _, data := range initialMessages {
+		c.writeQueue <- &message{messageType: messageType, data: data}
 	}
 
 	// We need to lock the mutex since we are executing write operations on clients map.
@@ -72,9 +83,7 @@ func (p *Pool) ConnHandlerFunc(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// It's important to create new clients using newClient factory function
-	// in order to inizialize them properly.
-	p.clients[p.autoIncrement] = newClient(conn, p)
+	p.clients[p.autoIncrement] = c
 	p.autoIncrement++
 }
 

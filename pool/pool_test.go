@@ -54,9 +54,12 @@ func newTestPool(t *testing.T) *Pool {
 	return NewPool(newTestLogger(t))
 }
 
-// newTestServer returns an http test server after having set pool.ConnHandlerFunc as its handler.
+// newTestServer returns an http test server after having set its handler,
+// which adds the client who has made the GET requests to the pool.
 func newTestServer(pool *Pool) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(pool.ConnHandlerFunc))
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pool.AddToPool(w, r, 0, nil)
+	}))
 }
 
 // populate opens connsNum connections to the websocket server reachable through url,
@@ -109,12 +112,23 @@ func waitForClose(conns []*websocket.Conn) {
 	wg.Wait()
 }
 
-func TestConnHandlerFunc(t *testing.T) {
+func TestAddToPool(t *testing.T) {
 	pool := newTestPool(t)
 
-	testSrv := newTestServer(pool)
+	const initialMessN = 10
 
-	conns, err := populate(switchProtocol(testSrv.URL), 10)
+	initialMessages := make([][]byte, 0, initialMessN)
+	for i := 0; i < initialMessN; i++ {
+		initialMessages = append(initialMessages, []byte(fmt.Sprint(i)))
+	}
+
+	testSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pool.AddToPool(w, r, websocket.TextMessage, initialMessages)
+	}))
+
+	const connsNum = 10
+
+	conns, err := populate(switchProtocol(testSrv.URL), connsNum)
 	if err != nil {
 		t.Error(err)
 		t.FailNow()
@@ -125,6 +139,26 @@ func TestConnHandlerFunc(t *testing.T) {
 		waitForClose(conns)
 		testSrv.Close()
 	}()
+
+	for j, c := range conns {
+		for i := 0; i < initialMessN; i++ {
+			messageType, data, err := c.ReadMessage()
+			if err != nil {
+				t.Errorf("error while reading message from client %d: %v", i, err)
+				continue
+			}
+
+			if messageType != websocket.TextMessage {
+				t.Errorf("unexpected message type for client %d, got %d, expected %d",
+					j, messageType, websocket.TextMessage)
+			}
+
+			if !bytes.Equal(data, initialMessages[i]) {
+				t.Errorf("unexpected message body for client %d, got %v, expected %v",
+					j, data, initialMessages[i])
+			}
+		}
+	}
 }
 
 func TestCloseAll(t *testing.T) {
@@ -196,6 +230,7 @@ func TestSendMessageToAll(t *testing.T) {
 		messageType, p, err := c.ReadMessage()
 		if err != nil {
 			t.Errorf("error while reading message from client %d: %v", i, err)
+			continue
 		}
 
 		if messageType != websocket.TextMessage {
@@ -241,6 +276,7 @@ func TestOrderOfArrival(t *testing.T) {
 			messageType, data, err := c.ReadMessage()
 			if err != nil {
 				t.Error(err)
+				continue
 			}
 
 			if messageType != websocket.TextMessage {
