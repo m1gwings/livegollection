@@ -23,9 +23,9 @@ type Pool struct {
 	// mu is used to prevent race conditions on write operations to clients or autoIncrement.
 	mu sync.Mutex
 
-	// readQueue is the channel where all the messages from
-	// clients in the pool are serialized.
-	readQueue chan *message
+	// readQueue is the channel where all the bodies of messages from
+	// clients to the pool are serialized.
+	readQueue chan []byte
 
 	// logger, if set, is used to log all the errors encountered.
 	logger *log.Logger
@@ -35,7 +35,7 @@ type Pool struct {
 func NewPool(l *log.Logger) *Pool {
 	return &Pool{
 		clients:   make(map[int]*client),
-		readQueue: make(chan *message),
+		readQueue: make(chan []byte),
 		logger:    l,
 	}
 }
@@ -149,12 +149,12 @@ func (p *Pool) SendMessageToAll(messageType int, data []byte) {
 	wg.Wait()
 }
 
-// ReadNextMessageInQueue is a blocking operation that eventually will return
-// the next message in readQueue, where all the messages from clients are serialized.
-// Sender of the message could be any of the clients in the pool.
-func (p *Pool) ReadNextMessageInQueue() []byte {
-	mess := <-p.readQueue
-	return mess.data
+// ReadQueue returns the readQueue of the pool.
+// To read a message use <-pool.ReadQueue().
+// The choice of returning the channel instead of waiting for the next message and returning it
+// is motivated by the advantage in "select" statement of the former approach.
+func (p *Pool) ReadQueue() <-chan []byte {
+	return p.readQueue
 }
 
 // CloseAll shuts down all the clients in the pool.

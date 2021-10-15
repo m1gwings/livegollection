@@ -292,7 +292,7 @@ func TestOrderOfArrival(t *testing.T) {
 	}
 }
 
-func TestReadNextMessageInQueue(t *testing.T) {
+func TestReadQueue(t *testing.T) {
 	pool := newTestPool(t)
 
 	testSrv := newTestServer(pool)
@@ -321,7 +321,7 @@ func TestReadNextMessageInQueue(t *testing.T) {
 	}
 
 	for i := 0; i < connsNum; i++ {
-		mess := pool.ReadNextMessageInQueue()
+		mess := <-pool.ReadQueue()
 		if string(mess) != messText {
 			t.Errorf("unexpected message body, got %s, expected %s", string(mess), messText)
 		}

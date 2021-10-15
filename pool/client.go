@@ -132,7 +132,7 @@ func (c *client) readQueueHandler(ctx context.Context) {
 			// The cancel function has been invoked, this goroutine should exit.
 			return
 		default:
-			messageType, data, err := c.conn.ReadMessage()
+			_, data, err := c.conn.ReadMessage()
 			if err != nil {
 				// When cancel is invoked by writeQueueHandler or by the pool through CloseAll method,
 				// writeQueueHandler will exit in at most writeWait seconds,
@@ -174,7 +174,7 @@ func (c *client) readQueueHandler(ctx context.Context) {
 			}
 
 			// If the message has been read successfully, we can push it onto the readQueue.
-			c.pool.readQueue <- &message{messageType, data}
+			c.pool.readQueue <- data
 		}
 	}
 }
