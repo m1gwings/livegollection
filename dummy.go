@@ -6,13 +6,13 @@ import (
 )
 
 type DummyItem struct {
-	ID     string `json:"id"`
+	Id     string `json:"id"`
 	String string `json:"string,omitempty"`
 	Num    int    `json:"num,omitempty"`
 }
 
-func (d DummyItem) GetID() string {
-	return d.ID
+func (d DummyItem) ID() string {
+	return d.Id
 }
 
 type DummyCollection struct {
@@ -24,7 +24,7 @@ func NewDummyCollection() *DummyCollection {
 	return &DummyCollection{data: make(map[string]DummyItem), i: 1}
 }
 
-func (c *DummyCollection) GetAll() ([]Item, error) {
+func (c *DummyCollection) All() ([]Item, error) {
 	items := make([]Item, 0, len(c.data))
 	for _, d := range c.data {
 		items = append(items, d)
@@ -33,7 +33,7 @@ func (c *DummyCollection) GetAll() ([]Item, error) {
 	return items, nil
 }
 
-func (c *DummyCollection) Get(ID string) (Item, error) {
+func (c *DummyCollection) Item(ID string) (Item, error) {
 	d, ok := c.data[ID]
 	if !ok {
 		return DummyItem{}, fmt.Errorf("there is no item with this ID: %s", ID)
@@ -49,7 +49,7 @@ func (c *DummyCollection) Create(item Item) (Item, error) {
 	}
 
 	newID := strconv.FormatInt(c.i, 16)
-	d.ID = newID
+	d.Id = newID
 
 	c.i++
 	c.data[newID] = d
@@ -63,12 +63,12 @@ func (c *DummyCollection) Update(item Item) error {
 		return fmt.Errorf("can't convert Item to DummyItem")
 	}
 
-	_, ok = c.data[d.ID]
+	_, ok = c.data[d.Id]
 	if !ok {
 		return fmt.Errorf("the following item isn't in the collection anymore: %v", d)
 	}
 
-	c.data[d.ID] = d
+	c.data[d.Id] = d
 
 	return nil
 }

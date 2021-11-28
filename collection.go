@@ -12,12 +12,12 @@ import (
 )
 
 type Item interface {
-	GetID() string
+	ID() string
 }
 
 type Collection interface {
-	GetAll() ([]Item, error)
-	Get(ID string) (Item, error)
+	All() ([]Item, error)
+	Item(ID string) (Item, error)
 	Create(Item) (Item, error)
 	Update(Item) error
 	Delete(ID string) error
@@ -51,7 +51,7 @@ func (lC *LiveCollection) logError(err error) {
 }
 
 func (lC *LiveCollection) Join(w http.ResponseWriter, r *http.Request) {
-	initialItems, err := lC.coll.GetAll()
+	initialItems, err := lC.coll.All()
 	if err != nil {
 		lC.logError(fmt.Errorf("error in Join from coll.GetAll: %v", err))
 	}
@@ -60,7 +60,7 @@ func (lC *LiveCollection) Join(w http.ResponseWriter, r *http.Request) {
 	for _, item := range initialItems {
 		var updMess updateMess
 		updMess.Method = createMethodString
-		updMess.ID = item.GetID()
+		updMess.ID = item.ID()
 		updMess.Item = item.(DummyItem)
 		message, err := json.Marshal(updMess)
 		if err != nil {
@@ -115,7 +115,7 @@ func (lC *LiveCollection) updatesHandler(ctx context.Context) {
 					continue
 				}
 
-				updMess.ID = item.GetID()
+				updMess.ID = item.ID()
 				updMess.Item = item.(DummyItem)
 
 				toSendData, err := json.Marshal(updMess)
