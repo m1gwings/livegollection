@@ -87,8 +87,8 @@ func isValidUpdateMethod(method updateMethod) bool {
 
 type updateMess struct {
 	Method updateMethod `json:"method"`
-	ID     string       `json:"id,omitempty"`
-	Item   DummyItem    `json:"item"`
+	ID     string       `json:"id,omitempty"`   // CREATE update message hasn't an ID
+	Item   DummyItem    `json:"item,omitempty"` // DELETE update message hasn't an item
 }
 
 func (lC *LiveCollection) updatesHandler(ctx context.Context) {

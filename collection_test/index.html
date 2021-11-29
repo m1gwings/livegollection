@@ -6,9 +6,31 @@
     <script src="/script"></script>
 </head>
 <body>
-    <div id="inbox"></div>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Num</th>
+                <th>String</th>
+            </tr>
+        </thead>
+        <tbody id="inbox">
+        </tbody>
+    </table>
+      
+    <template id="item">
+        <tr>
+            <td></td>
+            <td></td>
+            <td></td>
+        </tr>
+    </template>      
+
+    <input id="id" type="text" />
     <input id="string" type="text" />
     <input id="num" type="number" />
-    <button id="send">send</button>
+    <button id="create">create</button>
+    <button id="update">update</button>
+    <button id="delete">delete</button>
 </body>
 </html>

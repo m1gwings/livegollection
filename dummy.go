@@ -1,5 +1,8 @@
 package livegollection
 
+// TODO: This file, with DummyItem and DummyCollection implementation,
+// is required just for testing purpose and should be removed after the adding of type parameters.
+
 import (
 	"fmt"
 	"strconv"
@@ -36,7 +39,7 @@ func (c *DummyCollection) All() ([]Item, error) {
 func (c *DummyCollection) Item(ID string) (Item, error) {
 	d, ok := c.data[ID]
 	if !ok {
-		return DummyItem{}, fmt.Errorf("there is no item with this ID: %s", ID)
+		return nil, fmt.Errorf("there is no item with this ID: %s", ID)
 	}
 
 	return d, nil
