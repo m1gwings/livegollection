@@ -109,7 +109,8 @@ func (lC *LiveCollection) updatesHandler(ctx context.Context) {
 
 			switch updMess.Method {
 			case createMethodString:
-				item, err := lC.coll.Create(updMess.Item)
+				var item Item
+				item, err = lC.coll.Create(updMess.Item)
 				if err != nil {
 					lC.logError(err)
 					continue
@@ -118,14 +119,6 @@ func (lC *LiveCollection) updatesHandler(ctx context.Context) {
 				updMess.ID = item.ID()
 				updMess.Item = item.(DummyItem)
 
-				toSendData, err := json.Marshal(updMess)
-				if err != nil {
-					lC.logError(err)
-					continue
-				}
-
-				lC.pool.SendMessageToAll(websocket.TextMessage, toSendData)
-
 			case updateMethodString:
 				err := lC.coll.Update(updMess.Item)
 				if err != nil {
@@ -133,29 +126,21 @@ func (lC *LiveCollection) updatesHandler(ctx context.Context) {
 					continue
 				}
 
-				toSendData, err := json.Marshal(updMess)
-				if err != nil {
-					lC.logError(err)
-					continue
-				}
-
-				lC.pool.SendMessageToAll(websocket.TextMessage, toSendData)
-
 			case deleteMethodString:
 				err := lC.coll.Delete(updMess.ID)
 				if err != nil {
 					lC.logError(err)
 					continue
 				}
-
-				toSendData, err := json.Marshal(updMess)
-				if err != nil {
-					lC.logError(err)
-					continue
-				}
-
-				lC.pool.SendMessageToAll(websocket.TextMessage, toSendData)
 			}
+
+			toSendData, err := json.Marshal(updMess)
+			if err != nil {
+				lC.logError(err)
+				continue
+			}
+
+			lC.pool.SendMessageToAll(websocket.TextMessage, toSendData)
 
 		case <-ctx.Done():
 			return
