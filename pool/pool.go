@@ -89,14 +89,9 @@ func (p *Pool) AddToPool(w http.ResponseWriter, r *http.Request,
 
 // sendMessage is an helper function used to send a message to a specific client.
 // key is the integer key that identifies the client in clients map.
-// It is important that there is atmost one goroutine at the time running
-// sendMessage with the same value of key in order to prevent race conditions,
-// for example when deleting the client from the map.
+// Do NOT run multiple instances of this function in separate goroutines (even if the value for key is different)
+// because it could lead to race condition errors in map access.
 func (p *Pool) sendMessage(key int, mess *message) {
-	// This function should not lock the mutex,
-	// otherwise messages could be delivered just to a peer at a time.
-	// Race conditions are prevented by the mutex lock in SendMessageToAll.
-
 	c, ok := p.clients[key]
 
 	// If the program is working as intended, this condition will never be true.
@@ -130,23 +125,9 @@ func (p *Pool) SendMessageToAll(messageType int, data []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// To make the mutex lock effective we need to keep the function
-	// running until all the concurrent sendMessage have finished.
-	// For this reason we use a wait group.
-	var wg sync.WaitGroup
-
 	for key := range p.clients {
-		wg.Add(1)
-
-		// It is important to pass key as a value to the goroutine.
-		// The outer loop key changes during iterations.
-		go func(key int) {
-			p.sendMessage(key, &message{messageType, data})
-			wg.Done()
-		}(key)
+		p.sendMessage(key, &message{messageType, data})
 	}
-
-	wg.Wait()
 }
 
 // ReadQueue returns the readQueue of the pool.
