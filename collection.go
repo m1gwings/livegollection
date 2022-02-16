@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/m1gwings/livegollection/pool"
@@ -44,6 +45,7 @@ type LiveGollection[T Item] struct {
 	coll   Collection[T]
 	pool   *pool.Pool
 	logger *log.Logger
+	mu     sync.Mutex
 }
 
 // NewLiveGollection returns a pointer to a new LiveGollection instance after having set it properly.
@@ -79,6 +81,11 @@ func (lG *LiveGollection[T]) logError(err error) {
 // The proper way to set the websocket server-side handler of livegollection is to
 // add a route to this function with, for example, http.HandleFunc("route/to/livegollection", liveGoll.Join) .
 func (lG *LiveGollection[T]) Join(w http.ResponseWriter, r *http.Request) {
+	// We need to lock the mutex because otherwise we would miss the updates received
+	// between the call to All and the call to AddToPool.
+	lG.mu.Lock()
+	defer lG.mu.Unlock()
+
 	initialItems, err := lG.coll.All()
 	if err != nil {
 		lG.logError(fmt.Errorf("error in Join from coll.GetAll: %v", err))
@@ -130,6 +137,10 @@ func (lG *LiveGollection[T]) updatesHandler(ctx context.Context) {
 	for {
 		select {
 		case updateBody := <-lG.pool.ReadQueue():
+			// We need to lock the mutex to prevent sending updates while we
+			// are adding a client to the pool since the new client wouldn't receive them.
+			lG.mu.Lock()
+
 			var updMess updateMess[T]
 			err := json.Unmarshal(updateBody, &updMess)
 			if err != nil {
@@ -173,6 +184,8 @@ func (lG *LiveGollection[T]) updatesHandler(ctx context.Context) {
 			}
 
 			lG.pool.SendMessageToAll(websocket.TextMessage, toSendData)
+
+			lG.mu.Unlock()
 
 		case <-ctx.Done():
 			return
