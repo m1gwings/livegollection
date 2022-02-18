@@ -26,7 +26,7 @@ type Item[IdType any] interface {
 // It wraps the following methods: All, Item, Create, Update, Delete.
 // All returns all the items inside the collection (as a slice of items) or an error if something goes wrong.
 // Item takes an id and returns the correspondant item or an error if something goes wrong.
-// Create takes an item which will be added to the collection. It returns the newly added item after its id field has been set
+// Create takes an item which will be added to the collection. It returns the newly added item AFTER its id field has been set
 // or an error if something goes wrong.
 // Update takes an item which will be updated inside the collection and returns an error if something goes wrong.
 // Delete takes an id and deletes the correspondant item from the collection. It returns an error if something goes wrong.
